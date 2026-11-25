@@ -260,6 +260,57 @@ func (s *llamaServerRunner) llamaServerMediaMarker() string {
 	return "<__media__>"
 }
 
+// replaceMediaMarkers replaces at most one occurrence for each media entry.
+// Scanning the prompt once avoids copying it again for every image.
+func replaceMediaMarkers(prompt string, media []MediaData, replacement string) string {
+	// Only use the fast path for bracket-free, angle-delimited media markers.
+	// Other strings could create a new image marker across a replacement boundary.
+	if !strings.HasPrefix(replacement, "<") || !strings.HasSuffix(replacement, ">") || strings.Contains(replacement, "[") {
+		for _, m := range media {
+			prompt = strings.Replace(prompt, fmt.Sprintf("[img-%d]", m.ID), replacement, 1)
+		}
+		return prompt
+	}
+	counts := make(map[string]int, len(media))
+	for _, m := range media {
+		counts[fmt.Sprintf("[img-%d]", m.ID)]++
+	}
+	var result strings.Builder
+	last := 0
+	for i := 0; i < len(prompt); {
+		pos := strings.Index(prompt[i:], "[img-")
+		if pos < 0 {
+			break
+		}
+		start := i + pos
+		end := start + len("[img-")
+		if end < len(prompt) && prompt[end] == '-' {
+			end++
+		}
+		digits := end
+		for end < len(prompt) && prompt[end] >= '0' && prompt[end] <= '9' {
+			end++
+		}
+		if end == digits || end >= len(prompt) || prompt[end] != ']' {
+			i = start + len("[img-")
+			continue
+		}
+		end++
+		if marker := prompt[start:end]; counts[marker] > 0 {
+			result.WriteString(prompt[last:start])
+			result.WriteString(replacement)
+			counts[marker]--
+			last = end
+		}
+		i = end
+	}
+	if last == 0 {
+		return prompt
+	}
+	result.WriteString(prompt[last:])
+	return result.String()
+}
+
 func newLlamaServerMediaMarker() string {
 	var b [16]byte
 	if _, err := crand.Read(b[:]); err == nil {
@@ -1800,11 +1851,9 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 	// Convert media: replace Ollama's stable [img-N] markers with the per-process
 	// llama-server media marker and package the matching payloads as base64.
 	if len(req.Media) > 0 {
-		promptStr := lsReq.Prompt.(string)
+		promptStr := replaceMediaMarkers(lsReq.Prompt.(string), req.Media, s.llamaServerMediaMarker())
 		var mediaData []string
 		for _, media := range req.Media {
-			marker := fmt.Sprintf("[img-%d]", media.ID)
-			promptStr = strings.Replace(promptStr, marker, s.llamaServerMediaMarker(), 1)
 			data, err := llamaServerMediaBytes(media.Data)
 			if err != nil {
 				return err

@@ -111,8 +111,9 @@ func imageTaggedMessages(m *Model, msgs []api.Message, start int, clearImages bo
 			return nil, nil, errors.New("this model only supports one image while more than one image requested")
 		}
 
-		var prefix string
-		prompt := msg.Content
+		var prefix, rendered strings.Builder
+		remaining := msg.Content
+		searchPlaceholders := true
 
 		for _, i := range msg.Images {
 			mediaData := llm.NewMediaData(len(media), i)
@@ -125,15 +126,21 @@ func imageTaggedMessages(m *Model, msgs []api.Message, start int, clearImages bo
 			// The prompt marker is still image-named for compatibility with
 			// existing templates and llama-server media marker replacement.
 			imgTag := fmt.Sprintf("[img-%d]", mediaData.ID)
-			if !strings.Contains(prompt, "[img]") {
-				prefix += imgTag
-			} else {
-				prompt = strings.Replace(prompt, "[img]", imgTag, 1)
+			if searchPlaceholders {
+				if pos := strings.Index(remaining, "[img]"); pos >= 0 {
+					rendered.WriteString(remaining[:pos])
+					rendered.WriteString(imgTag)
+					remaining = remaining[pos+len("[img]"):]
+					continue
+				}
+				searchPlaceholders = false
 			}
+			prefix.WriteString(imgTag)
 		}
 
 		if m.Config.Renderer == "" {
-			renderMsgs[start+cnt].Content = prefix + prompt
+			rendered.WriteString(remaining)
+			renderMsgs[start+cnt].Content = prefix.String() + rendered.String()
 		}
 		if clearImages {
 			renderMsgs[start+cnt].Images = nil

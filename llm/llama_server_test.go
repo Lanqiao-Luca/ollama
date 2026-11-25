@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,66 @@ import (
 	"github.com/ollama/ollama/api"
 	"golang.org/x/sync/semaphore"
 )
+
+func TestReplaceMediaMarkers(t *testing.T) {
+	if got := replaceMediaMarkers("[im[img-0]g-1]", []MediaData{{ID: 0}, {ID: 1}}, ""); got != "" {
+		t.Fatalf("replacement boundary formed a marker: got %q, want empty string", got)
+	}
+	// Compare to the previous per-media replacement, including repeated IDs,
+	// missing markers, malformed markers and media in a different order.
+	rng := rand.New(rand.NewSource(42))
+	parts := []string{"text", "[img-0]", "[img-1]", "[img--1]", "[img-01]", "[img-", "[img-x]", "[img-2]"}
+	for range 1000 {
+		var prompt strings.Builder
+		for range rng.Intn(30) {
+			prompt.WriteString(parts[rng.Intn(len(parts))])
+		}
+		media := make([]MediaData, rng.Intn(15))
+		for i := range media {
+			media[i].ID = rng.Intn(4) - 1
+		}
+		for _, replacement := range []string{"<media>", "", "[img-0]"} {
+			want := prompt.String()
+			for _, m := range media {
+				want = strings.Replace(want, fmt.Sprintf("[img-%d]", m.ID), replacement, 1)
+			}
+			if got := replaceMediaMarkers(prompt.String(), media, replacement); got != want {
+				t.Fatalf("prompt %q, media %v, replacement %q: got %q, want %q", prompt.String(), media, replacement, got, want)
+			}
+		}
+	}
+}
+
+func BenchmarkReplaceMediaMarkers(b *testing.B) {
+	media := make([]MediaData, 10000)
+	var prompt strings.Builder
+	for i := range media {
+		media[i].ID = i
+		fmt.Fprintf(&prompt, "[img-%d]", i)
+	}
+	text := prompt.String()
+	b.ResetTimer()
+	for range b.N {
+		replaceMediaMarkers(text, media, "<media>")
+	}
+}
+
+func BenchmarkReplaceMediaMarkersLegacy(b *testing.B) {
+	media := make([]MediaData, 10000)
+	var prompt strings.Builder
+	for i := range media {
+		media[i].ID = i
+		fmt.Fprintf(&prompt, "[img-%d]", i)
+	}
+	text := prompt.String()
+	b.ResetTimer()
+	for range b.N {
+		result := text
+		for _, m := range media {
+			result = strings.Replace(result, fmt.Sprintf("[img-%d]", m.ID), "<media>", 1)
+		}
+	}
+}
 
 func TestLlamaServerHealthParsing(t *testing.T) {
 	tests := []struct {

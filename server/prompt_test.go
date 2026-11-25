@@ -22,6 +22,40 @@ func testConfigWithRendererAndType(renderer, modelType string) model.ConfigV2 {
 	return model.ConfigV2{Renderer: renderer, ModelType: modelType}
 }
 
+func TestImageTaggedMessagesPlaceholderPlacement(t *testing.T) {
+	tests := []struct {
+		content string
+		count   int
+		want    string
+	}{
+		{"describe", 2, "[img-0][img-1]describe"},
+		{"one [img] two [img]", 2, "one [img-0] two [img-1]"},
+		{"one [img]", 3, "[img-1][img-2]one [img-0]"},
+		{"one [img] two [img]", 1, "one [img-0] two [img]"},
+	}
+	for _, tt := range tests {
+		images := make([]api.ImageData, tt.count)
+		msgs, media, err := imageTaggedMessages(&Model{}, []api.Message{{Content: tt.content, Images: images}}, 0, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msgs[0].Content != tt.want || len(media) != tt.count {
+			t.Fatalf("content %q, count %d: got %q and %d images, want %q and %d", tt.content, tt.count, msgs[0].Content, len(media), tt.want, tt.count)
+		}
+	}
+}
+
+func BenchmarkImageTaggedMessages(b *testing.B) {
+	msgs := []api.Message{{Content: "describe", Images: make([]api.ImageData, 10000)}}
+	m := &Model{}
+	b.ResetTimer()
+	for range b.N {
+		if _, _, err := imageTaggedMessages(m, msgs, 0, false); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestChatPrompt(t *testing.T) {
 	type expect struct {
 		prompt string
